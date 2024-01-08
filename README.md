@@ -1,7 +1,7 @@
 # ica_analysis_requeue_webapp
 pyscript-based web app that allows a user to generate CLI and API requeue templates for Illumina Connected Analytics (ICA)
 
-See [here](https://keng404.github.io/) to interact with it live.
+See [here](https://keneng87.pyscriptapps.com/ica-analysis-requeue/latest/) to interact with it live.
 
 ## notes
 - python script ```main.py``` contains logic to render elements in the ```index.html```.
