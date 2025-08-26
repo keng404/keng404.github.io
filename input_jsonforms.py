@@ -31,7 +31,7 @@ def choices_conversion(choices,val):
 
 
 
-def curlify(method="GET",endpoint="FOOBAR",header={},body={}):
+async def curlify(method="GET",endpoint="FOOBAR",header={},body={}):
     curlified_command_components = []
     curlified_command_components.append(f"curl -X '{method}' \\")
     curlified_command_components.append(f" '{endpoint}' \\")
