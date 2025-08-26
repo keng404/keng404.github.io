@@ -14,6 +14,7 @@ from datetime import datetime as dt
 from tempfile import NamedTemporaryFile
 import webbrowser
 import re
+import input_jsonforms
 ###############
 step1_message = "STEP1: Login using your ICA credentials"
 pydom["h1#step1-message"].html = step1_message
@@ -616,6 +617,38 @@ async def get_cwl_input_template(pipeline_code, jwt_token,project_name, fixed_in
     templates['parameter_settings'] = parameter_settings_template
     return templates
 #####################
+###################################################
+async def get_cli_template_jsoninputform(jwt_token, project_id, pipeline_name, analysis_id,tags, storage_size, pipeline_run_name,workflow_language):
+    user_pipeline_reference_alias = pipeline_run_name.replace(" ","_")
+    pipeline_run_name = user_pipeline_reference_alias
+    cli_template_prefix = ["icav2","projectpipelines","start",f"{workflow_language}json",f"'{pipeline_name}'","--user-reference",f"{pipeline_run_name}"]
+    #### user tags for input
+    cli_tags_template = []
+    for k,v in enumerate(tags):
+        cli_tags_template.append(["--user-tag",v])
+    ############################################
+    inputform_values = await input_jsonforms.get_inputform_values(jwt_token,project_id,analysis_id)
+    cli_input_form_values_dict = input_jsonforms.collect_clidict_jsoninputform(inputform_values)
+    print(f"cli_input_form_values_dict: {cli_input_form_values_dict}")
+    cli_input_form_values = input_jsonforms.clidict_to_commandline(cli_input_form_values_dict)
+    print(f"cli_input_form_values: {cli_input_form_values}")
+    ############################################
+    cli_metadata_template = ["--access-token",f"'{jwt_token}'","--project-id",f"{project_id}","--storage-size",f"{storage_size}"]
+    full_cli = [cli_template_prefix,cli_tags_template,cli_input_form_values,cli_metadata_template]
+    cli_template = ' '.join(flatten_list(full_cli))
+    ## add newlines and create 'pretty' template
+    new_cli_template = prettify_cli_template(flatten_list(full_cli))
+    if new_cli_template is not None:
+        cli_template = new_cli_template
+
+    ######
+    pipeline_run_name_alias = pipeline_run_name.replace(" ","_")
+    print(f"Writing your cli job template out to {pipeline_run_name_alias}.cli_job_template.txt for future use.\n")
+    with open(f"{pipeline_run_name_alias}.cli_job_template.txt", "w") as outfile:
+        outfile.write(f"{cli_template}")
+    print("Also printing out the CLI template to screen\n")
+    return(print(f"{cli_template}\n"))
+######################################
 ##########################################
 #### STEP 1 in HTML
 async def load_login_info(event):
@@ -816,21 +849,24 @@ async def generate_requeue_template(event):
                 storage_size = project_analysis['analysisStorage']['name']
             else:
                 storage_size = 'Large'
+            input_form_type = project_analysis['pipeline']['inputFormType'].upper()
     ##### crafting job template
     input_data_fields_to_keep  = []
     param_fields_to_keep = []
-    display('Getting data input and paramters from analysis',target="requeue-template-logging",append="True")
-    job_templates = await get_cwl_input_template(pipeline_name, authorization_metadata['jwt_token'],analysis_metadata['project_name'],input_data_fields_to_keep, param_fields_to_keep,analysis_id = analysis_id,project_id=analysis_metadata['project_id'])
+    if input_form_type == "XML":
+        display('Getting data input and parameters from analysis',target="requeue-template-logging",append="True")
+        job_templates = await get_cwl_input_template(pipeline_name, authorization_metadata['jwt_token'],analysis_metadata['project_name'],input_data_fields_to_keep, param_fields_to_keep,analysis_id = analysis_id,project_id=analysis_metadata['project_id'])
     ########################################
     #### now let's set up pipeline analysis by updating the template
     dateTimeObj = dt.now()
     timestampStr = dateTimeObj.strftime("%Y%b%d_%H_%M_%S_%f")
     pipeline_run_name = analysis_metadata['analysis_name'] + "_requeue_" + timestampStr 
     pipeline_run_name = pipeline_run_name.replace(" ","_")
-    #print(f"Setting up pipeline analysis for {pipeline_run_name}")
-    my_params = job_templates['parameter_settings']
-    #display(my_params)
-    my_data_inputs = job_templates['input_data']
+    if input_form_type == "XML":
+        #print(f"Setting up pipeline analysis for {pipeline_run_name}")
+        my_params = job_templates['parameter_settings']
+        #display(my_params)
+        my_data_inputs = job_templates['input_data']
     #display(my_data_inputs)
     pipeline_id = await get_pipeline_id(pipeline_name, authorization_metadata['jwt_token'],analysis_metadata['project_name'],project_id = analysis_metadata['project_id'])
     my_tags = [pipeline_run_name]
@@ -840,7 +876,10 @@ async def generate_requeue_template(event):
     #print(f"{time_now} Launching pipeline analysis for {pipeline_run_name}")
     if TEMPLATE_TYPE.lower() == "cli":
         display('Generating CLI template',target="requeue-template-logging",append="True")
-        cli_template = get_pipeline_request_template(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_name, my_data_inputs, my_params,my_tags, storage_size, pipeline_run_name,workflow_language)
+        if input_form_type == "XML":
+            cli_template = get_pipeline_request_template(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_name, my_data_inputs, my_params,my_tags, storage_size, pipeline_run_name,workflow_language)
+        elif input_form_type == "JSON":
+            cli_template = await get_cli_template_jsoninputform(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_name, analysis_id ,my_tags, storage_size, pipeline_run_name,workflow_language)
         #create_download_button(cli_template)
         pydom["script#my_template"].style["display"] = "block"
         document.getElementById('my_template').innerHTML = cli_template
@@ -852,7 +891,13 @@ async def generate_requeue_template(event):
     elif TEMPLATE_TYPE.lower() == "api":
         ####################################
         display('Generating API template',target="requeue-template-logging",append="True")
-        test_launch = await launch_pipeline_analysis_cwl(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_id, my_data_inputs, my_params,my_tags, my_storage_analysis_id, pipeline_run_name,workflow_language,make_template = True)
+        if input_form_type == "XML":
+            test_launch = await launch_pipeline_analysis_cwl(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_id, my_data_inputs, my_params,my_tags, my_storage_analysis_id, pipeline_run_name,workflow_language,make_template = True)
+        elif input_form_type == "JSON":
+            input_dict = await input_jsonforms.get_inputform_values(authorization_metadata['jwt_token'], analysis_metadata['project_id'],analysis_id)
+            api_dict =  input_jsonforms.collect_apidict_jsoninputform(input_dict)
+            if api_dict is not None:
+                test_launch = await input_jsonforms.submit_jsoninputform(authorization_metadata['jwt_token'], analysis_metadata['project_id'], pipeline_id, api_dict,my_tags, my_storage_analysis_id, pipeline_run_name,workflow_language,make_template = args.create_api_template) 
         #create_download_button(test_launch)
         pydom["script#my_template"].style["display"] = "block"
         #display(test_launch,target="my_template",append="False")
@@ -894,8 +939,25 @@ async def learn_api_cli(event):
     new_element.innerHTML = analysis_metadata['step3-api']
     #document.getElementById('step3-api').appendChild(new_element)
     # STEP4
+    analyses_list =[ analysis_metadata['metadata_by_analysis_id'][analysis_metadata['analysis_id']] ]
+    #analyses_list = await list_project_analyses(authorization_metadata['jwt_token'],analysis_metadata['project_id'])
+    for aidx,project_analysis in enumerate(analyses_list):
+        if project_analysis['userReference'] == analysis_metadata['analysis_name'] or project_analysis['id'] == analysis_metadata['analysis_name']:
+            analysis_id = project_analysis['id']
+            display(f"Found Analysis with name {analysis_metadata['analysis_name']} with id : {analysis_id}\n",target="requeue-template-logging",append="True")
+            pipeline_id = project_analysis['pipeline']['id']
+            pipeline_name = project_analysis['pipeline']['code']
+            workflow_language = project_analysis['pipeline']['language'].lower()
+            if 'analysisStorage' in project_analysis.keys():
+                storage_size = project_analysis['analysisStorage']['name']
+            else:
+                storage_size = 'Large'
+            input_form_type = project_analysis['pipeline']['inputFormType'].upper()
     new_element = document.getElementById('step4-cli-content')
-    new_element.innerHTML = f"#Grab dataInputs<br><br>icav2 projectanalyses input {analysis_metadata['analysis_id']} --project-id {analysis_metadata['project_id']}  --access-token '{authorization_metadata['jwt_token']}'<br><br>Currently you cannot grab parameter configurations from previous analyses via the CLI<br>You can grab all possible parameter configurations via the API. Click API tab for more info<br>"
+    if input_form_type == "XML":
+        new_element.innerHTML = f"#Grab dataInputs<br><br>icav2 projectanalyses input {analysis_metadata['analysis_id']} --project-id {analysis_metadata['project_id']}  --access-token '{authorization_metadata['jwt_token']}'<br><br>Currently you cannot grab parameter configurations from previous analyses via the CLI<br>You can grab all possible parameter configurations via the API. Click API tab for more info<br>"
+    elif input_form_type == "JSON":
+        new_element.innerHTML = f"#Grab dataInputs<br><br>icav2 projectanalyses input {analysis_metadata['analysis_id']} --project-id {analysis_metadata['project_id']}  --access-token '{authorization_metadata['jwt_token']}'<br><br>"
     #document.getElementById('step4-cli').appendChild(new_element)
     new_element = document.getElementById('step4-api-content')
     full_steps = '<br>'.join(analysis_metadata['step4-api'])
